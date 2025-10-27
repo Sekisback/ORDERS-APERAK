@@ -8,7 +8,7 @@
 #
 # History:
 # 1.1.0  Funktion: wahlweise Full-Report oder nur Neue
-# 1.0.1   Bugfix  : Typo im Mainpath und paste0 anstell file.path wegen UNC
+# 1.0.1  Bugfix  : Typo im Mainpath und paste0 anstell file.path wegen UNC
 # 1.0.0  Funktion: Initiale Freigabe
 #
 # --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --
