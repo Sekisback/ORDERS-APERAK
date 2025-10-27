@@ -4,10 +4,11 @@
 #
 # Author : Sascha Kornberger
 # Datum  : 26.10.2025
-# Version: 1.0.0
+# Version: 1.0.1
 #
 # History:
-# 1.0.0  Funktion: Initiale Freigabe
+# 1.0.1   Bugfix  : Typo im Mainpath und paste0 anstell file.path wegen UNC
+# 1.0.0   Funktion: Initiale Freigabe
 #
 # --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --
 
@@ -46,13 +47,13 @@ invisible(lapply(pakete, function(pkg) {
 
 ## Pfade basierend auf der Umgebung ----
 if (Sys.info()[["sysname"]] == "Windows") {
-  main_path <- "//swnor.eeg-powerbox.de/eeg/Technik$/DLZMBS/05 irgendwas/ORDERS und APERAKs"
+  main_path <- "//swnor.eeg-powerbox.de/eeg/Technik$/DLZMSB/05 Logfiles/ORDERS und APERAKs/"
 } else {
   main_path <- "/media/archive/RStudio/EEG/swnor.eeg-powerbox.de/eeg/Technik$/DLZMSB/ORDERS und APERAKs"
 }
 
 # Unterordner für Reports 
-reports_path <- file.path(main_path, "_ECOUNT_REPORTS")
+reports_path <- paste0(main_path, "_ECOUNT_REPORTS")
 
 
 # --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- -#
@@ -73,7 +74,7 @@ print_line <- function(char = "-", length = 66) {
 
 # CSV-Dateien finden 
 get_csv_files <- function(main_path) {
-  reports_path <- file.path(main_path, "_ECOUNT_REPORTS")
+  reports_path <- paste0(main_path, "_ECOUNT_REPORTS")
   csv_files <- list.files(reports_path, pattern = "\\.csv$", full.names = TRUE)
   
   if (length(csv_files) == 0) {
@@ -136,7 +137,7 @@ read_orders_csv <- function(csv_path) {
 
 # XLSX einlesen
 read_orders_xlsx <- function(main_path, customer, operator = NULL) {
-  customer_path <- file.path(main_path, customer)
+  customer_path <- paste0(main_path, customer)
   xlsx_files <- list.files(customer_path, pattern = "\\.xlsx$", full.names = TRUE)
   
   if (length(xlsx_files) == 0) {
@@ -281,7 +282,7 @@ update_orders_xlsx <- function(main_path, customer, df_diff, operator = NULL) {
   }
   
   # Datei & Blatt bestimmen
-  customer_path <- file.path(main_path, customer)
+  customer_path <- paste0(main_path, customer)
   xlsx_files <- list.files(customer_path, pattern = "\\.xlsx$", full.names = TRUE)
   if (length(xlsx_files) == 0) {
     log_pretty("Warnung", paste("Keine XLSX-Datei im Kundenordner", customer))
