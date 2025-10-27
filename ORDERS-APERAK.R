@@ -4,9 +4,10 @@
 #
 # Author : Sascha Kornberger
 # Datum  : 26.10.2025
-# Version: 1.0.0
+# Version: 1.1.0
 #
 # History:
+# 1.1.0  Funktion: wahlweise Full-Report oder nur Neue
 # 1.0.0  Funktion: Initiale Freigabe
 #
 # --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --
@@ -38,7 +39,13 @@ if (length(installiere_fehlende) > 0) {
 invisible(lapply(pakete, function(pkg) {
   suppressPackageStartupMessages(library(pkg, character.only = TRUE))
 }))
+# --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --
+#                                 Konstante                                 ----
+# --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --
 
+# Steuert ob nur neue Malos in die Excel geschrieben werden oder alle 
+# und der letzte Kommentar wird übernommen
+FULL <- FALSE
 
 # --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --
 #                                 UNC-Pfade                                 ----
@@ -82,7 +89,7 @@ get_csv_files <- function(main_path) {
     print_line()
     stop(invisible(NULL))
   }
-  
+  print_line()
   log_pretty("Gefundene CSV-Dateien", length(csv_files))
   return(csv_files)
 }
@@ -154,7 +161,7 @@ read_orders_xlsx <- function(main_path, customer, operator = NULL) {
     wb_sheets[1]
   }
   
-  log_pretty("Lese XLSX-Datei", paste(basename(xlsx_file), "→ Blatt:", sheet_to_use))
+  #log_pretty("Lese XLSX-Datei", paste(basename(xlsx_file), "→ Blatt:", sheet_to_use))
   
   df <- read_excel(xlsx_file, sheet = sheet_to_use, skip = 1)
   df[[1]] <- convert_excel_date(df[[1]])
@@ -216,7 +223,7 @@ process_customer <- function(csv_path, main_path) {
 
 # Vergleich Neu vs Alt
 compare_orders <- function(df_orders_neu, df_orders_alt) {
-  log_pretty("Vergleiche Daten", "Neue vs. alte Orders")
+  #log_pretty("Vergleiche Daten", "Neue vs. alte Orders")
   
   if (!("LS_ZPT" %in% names(df_orders_neu))) {
     stop("Spalte 'LS_ZPT' fehlt in df_orders_neu.")
@@ -241,17 +248,21 @@ run_all_customers <- function(main_path) {
     res <- process_customer(csv, main_path)
     if (is.null(res)) next
     
-    log_pretty("Vergleiche", "df_orders_neu mit df_orders_alt")
-    
     df_diff <- compare_orders(res$df_orders_neu, res$df_orders_alt)
+    
     ergebnisse[[res$kunde]] <- list(
       df_orders_neu = res$df_orders_neu,
       df_orders_alt = res$df_orders_alt,
       df_diff = df_diff
     )
     
-    log_pretty("Neue Zählpunkte für Kunde", paste0(res$kunde, " → ", nrow(df_diff)))
-    update_orders_xlsx(main_path, res$kunde, df_diff, res$operator)
+    update_orders_xlsx(
+      main_path = main_path,
+      customer = res$kunde,
+      df_diff = df_diff,
+      operator = res$operator,
+      df_orders_neu = res$df_orders_neu
+    )
   }
   
   print_line()
@@ -263,11 +274,13 @@ run_all_customers <- function(main_path) {
 }
 
 
+
 # XLSX aktualisieren
-update_orders_xlsx <- function(main_path, customer, df_diff, operator = NULL) {
+update_orders_xlsx <- function(main_path, customer, df_diff, operator = NULL, df_orders_neu = NULL) {
   library(openxlsx)
   
-  if (nrow(df_diff) == 0) {
+  # Keine neuen Zeilen im DIFF-Modus -> Ende
+  if (!FULL && nrow(df_diff) == 0) {
     log_pretty("Status", paste("Keine neuen Zählpunkte für", customer, "– kein Update nötig"))
     return(invisible(NULL))
   }
@@ -291,19 +304,21 @@ update_orders_xlsx <- function(main_path, customer, df_diff, operator = NULL) {
   xlsx_file <- xlsx_files[1]
   wb <- loadWorkbook(xlsx_file)
   wb_sheets <- sheets(wb)
+  op_str <- if (is.null(operator)) "" else operator
   
-  sheet_name <- if (identical(customer, "VBE") && grepl("50Hertz", operator %||% "", ignore.case = TRUE)) {
+  # Blattlogik
+  sheet_name <- if (identical(customer, "VBE") && grepl("50Hertz", op_str, ignore.case = TRUE)) {
     if (length(wb_sheets) >= 2) wb_sheets[2] else wb_sheets[1]
   } else {
     wb_sheets[1]
   }
   
-  log_pretty("Aktualisiere XLSX-Datei", paste(basename(xlsx_file), "→ Blatt:", sheet_name))
+  #log_pretty("Aktualisiere XLSX-Datei", paste(basename(xlsx_file), "→ Blatt:", sheet_name))
   
-  # Daten lesen (exakt das Blatt)
+  # Daten aus dem Blatt lesen
   df_xlsx <- read.xlsx(xlsx_file, sheet = sheet_name, skipEmptyRows = FALSE, startRow = 2)
   
-  # Spalten finden
+  # Spalten ermitteln
   col_letzter_eingang <- find_col(df_xlsx, "^letzter")
   col_malo            <- find_col(df_xlsx, "^MaLo")
   col_fehler          <- find_col(df_xlsx, "^Fehlerbearbeitung")
@@ -315,35 +330,105 @@ update_orders_xlsx <- function(main_path, customer, df_diff, operator = NULL) {
          paste(names(df_xlsx), collapse = ", "))
   }
   
-  # Neue Zeilen vorbereiten
-  df_append <- as.data.frame(matrix(NA, nrow = nrow(df_diff), ncol = ncol(df_xlsx)))
-  names(df_append) <- names(df_xlsx)
-  df_append[[col_letzter_eingang]] <- df_diff$DOC_DATE
-  df_append[[col_malo]] <- df_diff$LS_ZPT
-  df_append[[col_fehler]] <- sprintf(
-    "%s - Bitte Stammdatenänderung mit %s durchführen oder Stammdaten korrigieren",
-    customer,
-    operator
-  )
+  # 'letzter Eingang' robust als Date konvertieren
+  lep <- df_xlsx[[col_letzter_eingang]]
+  if (inherits(lep, "Date")) {
+    lep_date <- lep
+  } else if (is.numeric(lep)) {
+    lep_date <- suppressWarnings(as.Date(lep, origin = "1899-12-30"))
+  } else {
+    lep_date <- suppressWarnings(as.Date(lep, tryFormats = c("%d.%m.%Y", "%Y-%m-%d", "%d.%m.%y")))
+  }
+  df_xlsx[[col_letzter_eingang]] <- lep_date
   
-  # (Optional) Filter auf leere Bemerkungen
-  df_append <- df_append[is.na(df_append[[col_bemerkung]]) | df_append[[col_bemerkung]] == "", , drop = FALSE]
+  # FULL-Modus → kompletter CSV-Datensatz + Bemerkung aus XLSX (mit dortigem letztem Datum)
+  if (FULL) {
+    if (is.null(df_orders_neu)) stop("FULL=TRUE, aber df_orders_neu wurde nicht übergeben.")
+    
+    # Jüngste Bemerkung je MaLo inkl. letztem Eingang
+    remarks_latest <- df_xlsx |>
+      group_by(!!rlang::sym(col_malo)) |>
+      slice_max(order_by = !!rlang::sym(col_letzter_eingang), n = 1, with_ties = FALSE) |>
+      ungroup() |>
+      select(
+        MaLo = !!rlang::sym(col_malo),
+        Bemerkung = !!rlang::sym(col_bemerkung),
+        letzter_eingang_xlsx = !!rlang::sym(col_letzter_eingang)
+      )
+    
+    # Merge CSV-Daten mit Bemerkungen + Datum aus XLSX
+    df_append <- df_orders_neu |>
+      left_join(remarks_latest, by = c("LS_ZPT" = "MaLo")) |>
+      mutate(
+        DOC_DATE = as.Date(DOC_DATE),
+        Fehlerbearbeitung = sprintf(
+          "%s - Bitte Stammdatenänderung mit %s durchführen oder Stammdaten korrigieren",
+          customer, op_str
+        ),
+        Bemerkung = dplyr::case_when(
+          !is.na(Bemerkung) & Bemerkung != "" & !is.na(letzter_eingang_xlsx) ~
+            paste0(Bemerkung, " (letztmalig ", format(letzter_eingang_xlsx, "%d.%m.%Y"), ")"),
+          TRUE ~ ""
+        )
+      )
+    
+    # Nur Zeilen, die noch nicht existieren (DOC_DATE + LS_ZPT)
+    existing_pairs <- df_xlsx |>
+      filter(!is.na(!!sym(col_malo)) & !is.na(!!sym(col_letzter_eingang))) |>
+      transmute(MaLo_exist = !!sym(col_malo), DOC_exist = !!sym(col_letzter_eingang))
+    
+    df_append <- df_append |>
+      filter(!(LS_ZPT %in% existing_pairs$MaLo_exist &
+                 DOC_DATE %in% existing_pairs$DOC_exist))
+    
+    # Sortierung: Bemerkung zuerst, dann leer
+    df_append <- df_append |>
+      arrange(desc(Bemerkung != ""), DOC_DATE, LS_ZPT)
+    
+    # Wenn nichts mehr übrig, abbrechen
+    if (nrow(df_append) == 0) {
+      log_pretty("Status", paste("Keine neuen Kombinationen für", customer, "– kein Update nötig"))
+      print_line()
+      return(invisible(NULL))
+    }
+    
+    # In XLSX-Struktur überführen
+    df_final <- as.data.frame(matrix(NA, nrow = nrow(df_append), ncol = ncol(df_xlsx)))
+    names(df_final) <- names(df_xlsx)
+    df_final[[col_letzter_eingang]] <- df_append$DOC_DATE
+    df_final[[col_malo]] <- df_append$LS_ZPT
+    df_final[[col_fehler]] <- df_append$Fehlerbearbeitung
+    df_final[[col_bemerkung]] <- df_append$Bemerkung
+    
+  } else {
+    # DIFF-Modus → nur neue MaLo, Bemerkung leer
+    df_append <- as.data.frame(matrix(NA, nrow = nrow(df_diff), ncol = ncol(df_xlsx)))
+    names(df_append) <- names(df_xlsx)
+    df_append[[col_letzter_eingang]] <- df_diff$DOC_DATE
+    df_append[[col_malo]] <- df_diff$LS_ZPT
+    df_append[[col_fehler]] <- sprintf(
+      "%s - Bitte Stammdatenänderung mit %s durchführen oder Stammdaten korrigieren",
+      customer, op_str
+    )
+    df_final <- df_append
+  }
   
-  # Nächste freie Zeile robust ermitteln (genau dieses Blatt!)
+  # Nächste freie Zeile bestimmen
   existing_rows <- nrow(read.xlsx(xlsx_file, sheet = sheet_name, startRow = 2, skipEmptyRows = FALSE))
-  start_row <- existing_rows + 3  # +1 Header, +1 nächste freie Zeile (Sicherheitsabstand)
+  start_row <- existing_rows + 3
   
   # Schreiben & speichern
-  writeData(wb, sheet = sheet_name, x = df_append, startRow = start_row, colNames = FALSE)
+  writeData(wb, sheet = sheet_name, x = df_final, startRow = start_row, colNames = FALSE)
   saveWorkbook(wb, xlsx_file, overwrite = TRUE)
   
-  log_pretty("XLSX Update abgeschlossen", paste(customer, "-", nrow(df_append), "neue Zeilen angehängt"))
+  log_pretty("XLSX Update abgeschlossen", paste(customer, "-", nrow(df_final), "neue Zeilen hinzugefügt"))
   print_line()
 }
+
 
 # --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- -#
 # ----                               MAIN                                   ----
 # --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- -#
 
-alles <- run_all_customers(main_path)
+run_all_customers(main_path)
 
