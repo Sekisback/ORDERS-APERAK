@@ -3,10 +3,11 @@
 # ORDERS-APERAK Automatisches Update                                        ----
 #
 # Author : Sascha Kornberger
-# Datum  : 26.10.2025
-# Version: 1.1.0
+# Datum  : 30.10.2025
+# Version: 1.2.0
 #
 # History:
+# 1.2.0  Funktion: Bei neuen Malos wir die OrdersID in Bemerkung in rot eingetragen
 # 1.1.0  Funktion: wahlweise Full-Report oder nur Neue
 # 1.0.1  Bugfix  : Typo im Mainpath und paste0 anstell file.path wegen UNC
 # 1.0.0  Funktion: Initiale Freigabe
@@ -23,7 +24,7 @@ options(scipen = 999)
 # BENOETIGTE PAKETE ----
 ## Liste der Pakete ----
 pakete <- c(
-  "readr", "readxl", "dplyr", "stringr", "lubridate"
+  "readr", "readxl", "dplyr", "stringr", "lubridate", "openxlsx"
 )
 
 ## Installiere fehlende Pakete ohne Rückfragen ----
@@ -133,7 +134,7 @@ read_orders_csv <- function(csv_path) {
         TRUE ~ as.Date(NA)
       )
     ) |>
-    select(DOC_DATE, EMPFAENGER_ID, SENDER_ID, LS_ZPT) |>
+    select(DOC_DATE, EMPFAENGER_ID, SENDER_ID, LS_ZPT, ID) |>
     group_by(LS_ZPT) |>
     slice_max(DOC_DATE, n = 1, with_ties = FALSE) |>
     ungroup()
@@ -278,8 +279,7 @@ run_all_customers <- function(main_path) {
 
 # XLSX aktualisieren
 update_orders_xlsx <- function(main_path, customer, df_diff, operator = NULL, df_orders_neu = NULL) {
-  library(openxlsx)
-  
+
   # Keine neuen Zeilen im DIFF-Modus -> Ende
   if (!FULL && nrow(df_diff) == 0) {
     log_pretty("Status", paste("Keine neuen Zählpunkte für", customer, "– kein Update nötig"))
@@ -369,7 +369,7 @@ update_orders_xlsx <- function(main_path, customer, df_diff, operator = NULL, df
         Bemerkung = dplyr::case_when(
           !is.na(Bemerkung) & Bemerkung != "" & !is.na(letzter_eingang_xlsx) ~
             paste0(Bemerkung, " (letztmalig ", format(letzter_eingang_xlsx, "%d.%m.%Y"), ")"),
-          TRUE ~ ""
+          TRUE ~ as.character(ID)
         )
       )
     
@@ -411,6 +411,8 @@ update_orders_xlsx <- function(main_path, customer, df_diff, operator = NULL, df
       "%s - Bitte Stammdatenänderung mit %s durchführen oder Stammdaten korrigieren",
       customer, op_str
     )
+    # Wenn Bemerkung leer → ID schreiben
+    df_append[[col_bemerkung]] <- as.character(df_diff$ID)
     df_final <- df_append
   }
   
@@ -420,6 +422,26 @@ update_orders_xlsx <- function(main_path, customer, df_diff, operator = NULL, df
   
   # Schreiben & speichern
   writeData(wb, sheet = sheet_name, x = df_final, startRow = start_row, colNames = FALSE)
+  
+  # Stil für rote, fette ID-Einträge
+  style_id <- createStyle(
+    fontColour = "#FF0000",
+    textDecoration = "bold"
+  )
+  
+  # Spalte "Bemerkung" (bzw. ID-Vermerk) bestimmen
+  id_col_index <- which(names(df_xlsx) == col_bemerkung)
+  
+  # Style anwenden
+  addStyle(
+    wb,
+    sheet = sheet_name,
+    style = style_id,
+    rows = start_row:(start_row + nrow(df_final) - 1),
+    cols = id_col_index,
+    gridExpand = TRUE,
+    stack = TRUE
+  )
   saveWorkbook(wb, xlsx_file, overwrite = TRUE)
   
   log_pretty("XLSX Update abgeschlossen", paste(customer, "-", nrow(df_final), "neue Zeilen hinzugefügt"))
@@ -431,5 +453,5 @@ update_orders_xlsx <- function(main_path, customer, df_diff, operator = NULL, df
 # ----                               MAIN                                   ----
 # --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- -#
 
-run_all_customers(main_path)
+alle <- run_all_customers(main_path)
 
